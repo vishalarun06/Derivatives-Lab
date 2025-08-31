@@ -28,6 +28,9 @@ Compares the simulated stock price path against the strike price
 2.   **Install the required modules**
 These have been specified in the requirements.txt file in the repository.
 
+3.   **Load the script**
+Load the Derivatives-Lab.py file into an IDE (I use VS Code)
+
 ## 4. Usage
 
 For pricing options, first create an Option object by specifying, current stock price, strike price, time to expiry, risk-free rate and volatility. Can also add in option type and exercise type, if these are not specified, the option defaults to a european call option. You can then call any of the option pricing functions on the option
