@@ -20,3 +20,17 @@ Solves for implied volatility of a stock based on a given market price of an opt
 Simulates a delta hedging strategy for a short call option
 Visualises the P&L of the hedged portfolio against an unhedged position
 Compares the simulated stock price path against the strike price
+
+## 3. Installation
+
+1.   **Clone the repository**
+
+2.   **Install the required modules**
+These have been specified in the requirements.txt file in the repository.
+
+## 4. Usage
+
+For pricing options, first create an Option object by specifying, current stock price, strike price, time to expiry, risk-free rate and volatility. Can also add in option type and exercise type, if these are not specified, the option defaults to a european call option. You can then call any of the option pricing functions on the option
+
+In order to simulate a delta-hedge, similarly we need to create a call Option object. We then also need a stock price path, I have included a function to simulate a price path for an option, alternatively a price path can be inputted. We can then create a DeltaHedging object with the option and the price path. Then call the delta hedge and plot delta hedge functions onto the object and this will simulate and visualise a delta-hedging portfolio against an unhedged position for a short call option.
+
