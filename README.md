@@ -17,7 +17,7 @@ Calculates Delta, Gamma, Vega, Theta and Rho
 Solves for implied volatility of a stock based on a given market price of an option
 
 4.   **Delta-Hedging Simulation**
-Simulates a delta hedging strategy for a short call option
+Simulates a delta hedging strategy for holding a short/long position on a call/put option
 Visualises the P&L of the hedged portfolio against an unhedged position
 Compares the simulated stock price path against the strike price
 
