@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.stats import norm
 import matplotlib.pyplot as plt
-import yfinance as yf
 from scipy.optimize import newton
 from scipy.optimize import brentq
 import pandas as pd
+from datetime import date
 
 class Option:
     def __init__(self, S, K, T, r, sigma, option_type="call", exercise_type="european"):
@@ -23,6 +23,8 @@ class Option:
         self.exercise_type = exercise_type.lower()
 
     def price_black_scholes(self):
+        if self.exercise_type == "american":
+            raise ValueError("Black-Scholes formula is not valid for American options. Use a binomial tree instead.")
         d1 = (np.log(self.S/self.K)+self.T*(self.r+(self.sigma**2)*0.5))/(self.sigma*np.sqrt(self.T))
         d2 = d1 - self.sigma*np.sqrt(self.T)
     
@@ -35,18 +37,33 @@ class Option:
             return put
 
     def get_greeks(self):
+        if self.exercise_type == "american":
+            raise ValueError("Black-Scholes formula is not valid for American options. Use a binomial tree instead.")
         d1 = (np.log(self.S/self.K)+self.T*(self.r+0.5*(self.sigma**2)))/(self.sigma*np.sqrt(self.T))
         d2 = d1 - self.sigma*np.sqrt(self.T)
 
-        delta = norm.cdf(d1)
+        
         gamma = norm.pdf(d1)/(self.S*self.sigma*np.sqrt(self.T))
         vega = self.S * norm.pdf(d1) * np.sqrt(self.T)
-        theta = - (self.S * norm.pdf(d1) * self.sigma) / (2*np.sqrt(self.T)) - self.r * self.K * np.exp(-self.r*self.T) * norm.cdf(d2)
-        rho = self.K * self.T * np.exp(-self.r*self.T)*norm.cdf(d2)
-
+        if self.option_type == "call":
+            delta = norm.cdf(d1)
+            theta = - (self.S * norm.pdf(d1) * self.sigma) / (2*np.sqrt(self.T)) - self.r * self.K * np.exp(-self.r*self.T) * norm.cdf(d2)
+            rho = self.K * self.T * np.exp(-self.r*self.T)*norm.cdf(d2)
+        else: # For a put
+            delta = norm.cdf(d1) - 1
+            theta = - (self.S * norm.pdf(d1) * self.sigma) / (2*np.sqrt(self.T)) + self.r * self.K * np.exp(-self.r*self.T) * norm.cdf(-d2)
+            rho = -self.K * self.T * np.exp(-self.r*self.T)*norm.cdf(-d2)
+        
         return {"delta": delta, "gamma": gamma, "vega": vega, "theta": theta, "rho": rho}
     
-    def get_implied_volatility(self, market_price):
+    def get_implied_volatility(self, market_price, max_vol=20):
+        if self.option_type == "call":
+            intrinsic_value = max(0, self.S - self.K * np.exp(-self.r * self.T))
+        else:
+            intrinsic_value = max(0, self.K * np.exp(-self.r * self.T) - self.S)
+        
+        if market_price < intrinsic_value:
+            return np.nan
         def func(sigma):
             return (Option(self.S, self.K, self.T, self.r, sigma).price_black_scholes() - market_price)
         #def fprime(sigma):
@@ -56,14 +73,16 @@ class Option:
         b=1
         while func(b) < 0:
             b = 2*b
+            if b > max_vol:
+                return np.nan
         try:
             return brentq(func, a, b)
-        except ValueError or RuntimeError:
+        except (ValueError, RuntimeError):
             return np.nan
-    
+
     def plot_option_price_vs_stock_price(self):
         S_values = range(int(round(0.5*self.S)),int(round(1.5*self.S)),int(np.ceil(1/100*self.S)))
-        option_prices = [Option(s, self.K, self.T, self.r, self.sigma) for s in S_values]
+        option_prices = [Option(S_values, self.K, self.T, self.r, self.sigma).price_black_scholes()]
         plt.plot(S_values, option_prices)
         plt.title("Black-Scholes Call Option Pricing")
         plt.xlabel("Stock Price ($)")
@@ -99,6 +118,8 @@ class Option:
         return option_values[0]
     
     def price_monte_carlo(self, n):
+        if self.exercise_type == "american":
+            raise ValueError("Black-Scholes formula is not valid for American options. Use a binomial tree instead.")
         Z = np.random.standard_normal(n)
         ST = self.S * np.exp((self.r - 0.5 * (self.sigma**2)) * self.T + self.sigma * (np.sqrt(self.T) * Z))
         
@@ -128,17 +149,34 @@ class Option:
         plt.ylabel(f"{self.option_type.capitalize()} Option Price")
         plt.legend()
         plt.show()
+    
+    def simulate_price_path(self, steps):
+        dt = self.T / steps
+        Z = np.random.standard_normal(steps)
+        daily_returns = np.exp((self.r - 0.5 * self.sigma**2) * dt + self.sigma * np.sqrt(dt) * Z)
+        price_path = np.zeros(steps + 1)
+        price_path[0] = self.S
+        price_path[1:] = self.S * np.cumprod(daily_returns)
+        return price_path
 
-class DeltaHedging:
-    def __init__(self, option, stock_path):
+class Hedge:
+    def __init__(self, option, stock_path, position="short", transaction_cost=0.005):
         self.option = option
         self.stock_path = stock_path
         self.portfolio = None
+        self.position = position.lower()
+        if self.position not in ["long","short"]:
+            raise ValueError("You can only hold a 'long' or 'short' position on the option")
+        self.transaction_cost = transaction_cost ## This is a transaction cost per share
 
-    def delta_hedging_on_short_call(self):
-        steps = len(self.stock_path)
+    def delta_hedging(self):
+        steps = len(self.stock_path) - 1
         dt = self.option.T / steps
-
+        if self.position == "long":
+            position_multiplier = 1
+        else:
+            position_multiplier = -1
+        
         initial_price = self.option.price_black_scholes()
         initial_delta = self.option.get_greeks()["delta"]
 
@@ -146,29 +184,36 @@ class DeltaHedging:
             "Stock Price", "Shares Held", "Option Value", "Cash", "Portfolio Value", "Profit / Loss" ])
 
         portfolio.loc[0, "Stock Price"] = self.option.S
-        portfolio.loc[0, "Shares Held"] = initial_delta
-        portfolio.loc[0, "Option Value"] = initial_price
-        portfolio.loc[0, "Cash"] = initial_price - (initial_delta * self.option.S)
-        portfolio.loc[0, "Portfolio Value"] = initial_delta * self.option.S + portfolio.loc[0, "Cash"] - portfolio.loc[0, "Option Value"]
+        portfolio.loc[0, "Shares Held"] = -position_multiplier * initial_delta
+
+        initial_cost = abs(portfolio.loc[0, "Shares Held"]) * self.transaction_cost
+        
+        portfolio.loc[0, "Option Value"] = position_multiplier * initial_price
+        portfolio.loc[0, "Cash"] = -position_multiplier * initial_price - (portfolio.loc[0, "Shares Held"] * self.option.S ) - initial_cost
+        portfolio.loc[0, "Portfolio Value"] = portfolio.loc[0, "Shares Held"] * self.option.S + portfolio.loc[0, "Cash"] + portfolio.loc[0, "Option Value"]
         portfolio.loc[0, "Profit / Loss"] = 0
+
+        interest = np.exp(self.option.r*dt)
 
         for i in range(1, steps + 1):
             
             time_to_expiry = self.option.T - i*dt
-            interest = np.exp(-self.option.r*dt)
+            portfolio.loc[i, "Stock Price"] = self.stock_path[i]
 
-            portfolio.loc[i, "Stock Price"] = stock_path[i-1]
+            temp_option = Option(self.stock_path[i], self.option.K, time_to_expiry, self.option.r, self.option.sigma, self.option.option_type)
+
             if i != steps:
-                portfolio.loc[i, "Shares Held"] = Option(portfolio.loc[i, "Stock Price"], self.option.K, time_to_expiry, self.option.r, self.option.sigma, "call").get_greeks()["delta"]
-                portfolio.loc[i, "Option Value"] = Option(portfolio.loc[i, "Stock Price"], self.option.K, time_to_expiry, self.option.r, self.option.sigma, "call").price_black_scholes()
+                portfolio.loc[i, "Shares Held"] = -position_multiplier * temp_option.get_greeks()["delta"]
+                portfolio.loc[i, "Option Value"] = position_multiplier * temp_option.price_black_scholes()
             else:
-                portfolio.loc[i, "Option Value"] = max(0, portfolio.loc[i, "Stock Price"] - self.option.K)
-                if portfolio.loc[i, "Option Value"] != 0:
-                    portfolio.loc[i, "Shares Held"] = 1
+                if self.option.option_type == "call":
+                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, portfolio.loc[i, "Stock Price"] - self.option.K)
                 else:
-                    portfolio.loc[i, "Shares Held"] = 0
-            portfolio.loc[i, "Cash"] = portfolio.loc[i-1, "Cash"] * interest - (portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]) * stock_path[i-1]
-            portfolio.loc[i, "Portfolio Value"] = portfolio.loc[i, "Cash"] + portfolio.loc[i, "Stock Price"] * portfolio.loc[i, "Shares Held"] - portfolio.loc[i, "Option Value"]
+                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, self.option.K - portfolio.loc[i, "Stock Price"])
+                portfolio.loc[i, "Shares Held"] = 0
+            cost_of_trade = abs(portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]) * self.transaction_cost
+            portfolio.loc[i, "Cash"] = portfolio.loc[i-1, "Cash"] * interest - (portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]) * self.stock_path[i] - cost_of_trade
+            portfolio.loc[i, "Portfolio Value"] = portfolio.loc[i, "Cash"] + portfolio.loc[i, "Stock Price"] * portfolio.loc[i, "Shares Held"] + portfolio.loc[i, "Option Value"]
             portfolio.loc[i, "Profit / Loss"] = portfolio.loc[i, "Portfolio Value"] - portfolio.loc[0, "Portfolio Value"]
 
         final_profit_loss = portfolio.loc[steps, "Profit / Loss"]
@@ -180,11 +225,23 @@ class DeltaHedging:
             print("Please run the simulation first")
             return
         
+        if self.position == "long":
+            position_multiplier = 1
+        else:
+            position_multiplier = -1
+    
         portfolio = self.portfolio
-        unhedged_profit_loss = portfolio.loc[0, "Option Value"] - max(portfolio.loc[len(portfolio)-1, "Stock Price"]-self.option.K, 0)
+        initial_price = self.option.price_black_scholes()
+        final_stock_price = portfolio.loc[len(portfolio)-1, "Stock Price"]
+
+        if self.option.option_type == "call":
+            final_payout = max(0, final_stock_price - self.option.K)
+        else:
+            final_payout = max(0, self.option.K - final_stock_price)
         
+        unhedged_profit_loss = position_multiplier * (final_payout - initial_price)
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle("Delta Hedging Simulation Results", fontsize=16)
+        fig.suptitle("Delta Hedging Simulation Results ("+self.position.capitalize()+" "+self.option.option_type.capitalize()+")", fontsize=16)
 
         ax1.plot(portfolio.index, portfolio["Stock Price"], label="Stock Price Path", color="skyblue")
         ax1.axhline(y=self.option.K, color='r', linestyle='--', label=f"Strike Price (${self.option.K})")
@@ -204,11 +261,9 @@ class DeltaHedging:
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         plt.show()
 
-def simulate_price_path(self, steps):
-    dt = self.T / steps
-    Z = np.random.standard_normal(steps)
-    daily_returns = np.exp((self.r - 0.5 * self.sigma**2) * dt + self.sigma * np.sqrt(dt) * Z)
-    price_path = np.zeros(steps + 1)
-    price_path[0] = self.S
-    price_path[1:] = self.S * np.cumprod(daily_returns)
-    return price_path
+my_option = Option(100,105,1,0.05,0.2, "call")
+print(my_option.get_implied_volatility(10))
+stock_path = my_option.simulate_price_path(252)
+my_hedge = Hedge(my_option, stock_path, "short")
+my_hedge.delta_hedging()
+my_hedge.plot_delta_hedge()
