@@ -16,9 +16,10 @@ Calculates Delta, Gamma, Vega, Theta and Rho
 3.   **Implied Volatility**
 Solves for implied volatility of a stock based on a given market price of an option
 
-4.   **Delta-Hedging Simulation**
+4.   **Delta-Hedging vs Gamma-Hedging Simulation**
 Simulates a delta hedging strategy for holding a short/long position on a call/put option
-Visualises the P&L of the hedged portfolio against an unhedged position
+Simulates a gamma hedging strategy for holding a short/long position on a call/put option
+Visualises the P&L of the 2 hedged portfolios against an unhedged position
 Compares the simulated stock price path against the strike price
 
 ## 3. Installation
@@ -37,3 +38,4 @@ For pricing options, first create an Option object by specifying, current stock 
 
 In order to simulate a delta-hedge, similarly we need to create a call Option object. We then also need a stock price path, I have included a function to simulate a price path for an option, alternatively a price path can be inputted. We can then create a DeltaHedging object with the option and the price path. Then call the delta hedge and plot delta hedge functions onto the object and this will simulate and visualise a delta-hedging portfolio against an unhedged position for a short call option.
 
+The gamma-hedge works very similarly however you will also now need to input a second hedging option that is used in the gamma hedge!
