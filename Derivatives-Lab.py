@@ -160,56 +160,59 @@ class Option:
         return price_path
 
 class Hedge:
-    def __init__(self, option, stock_path, position="short", transaction_cost=0.005):
-        self.option = option
+    def __init__(self, primary_option, stock_path, position="short", hedging_option=None, transaction_cost=0.005, option_cost=0.01):
+        self.primary_option = primary_option
         self.stock_path = stock_path
-        self.portfolio = None
+        self.delta_portfolio = None
+        self.gamma_portfolio = None
         self.position = position.lower()
         if self.position not in ["long","short"]:
             raise ValueError("You can only hold a 'long' or 'short' position on the option")
         self.transaction_cost = transaction_cost ## This is a transaction cost per share
+        self.hedging_option = hedging_option
+        self.option_cost = option_cost
 
-    def delta_hedging(self):
+    def delta_hedge(self):
         steps = len(self.stock_path) - 1
-        dt = self.option.T / steps
+        dt = self.primary_option.T / steps
         if self.position == "long":
             position_multiplier = 1
         else:
             position_multiplier = -1
         
-        initial_price = self.option.price_black_scholes()
-        initial_delta = self.option.get_greeks()["delta"]
+        initial_price = self.primary_option.price_black_scholes()
+        initial_delta = self.primary_option.get_greeks()["delta"]
 
         portfolio = pd.DataFrame(index=range(steps+1),columns=[
             "Stock Price", "Shares Held", "Option Value", "Cash", "Portfolio Value", "Profit / Loss" ])
 
-        portfolio.loc[0, "Stock Price"] = self.option.S
+        portfolio.loc[0, "Stock Price"] = self.primary_option.S
         portfolio.loc[0, "Shares Held"] = -position_multiplier * initial_delta
 
         initial_cost = abs(portfolio.loc[0, "Shares Held"]) * self.transaction_cost
         
         portfolio.loc[0, "Option Value"] = position_multiplier * initial_price
-        portfolio.loc[0, "Cash"] = -position_multiplier * initial_price - (portfolio.loc[0, "Shares Held"] * self.option.S ) - initial_cost
-        portfolio.loc[0, "Portfolio Value"] = portfolio.loc[0, "Shares Held"] * self.option.S + portfolio.loc[0, "Cash"] + portfolio.loc[0, "Option Value"]
+        portfolio.loc[0, "Cash"] = -position_multiplier * initial_price - (portfolio.loc[0, "Shares Held"] * self.primary_option.S ) - initial_cost
+        portfolio.loc[0, "Portfolio Value"] = portfolio.loc[0, "Shares Held"] * self.primary_option.S + portfolio.loc[0, "Cash"] + portfolio.loc[0, "Option Value"]
         portfolio.loc[0, "Profit / Loss"] = 0
 
-        interest = np.exp(self.option.r*dt)
+        interest = np.exp(self.primary_option.r*dt)
 
         for i in range(1, steps + 1):
             
-            time_to_expiry = self.option.T - i*dt
+            time_to_expiry = self.primary_option.T - i*dt
             portfolio.loc[i, "Stock Price"] = self.stock_path[i]
 
-            temp_option = Option(self.stock_path[i], self.option.K, time_to_expiry, self.option.r, self.option.sigma, self.option.option_type)
+            temp_option = Option(self.stock_path[i], self.primary_option.K, time_to_expiry, self.primary_option.r, self.primary_option.sigma, self.primary_option.option_type)
 
             if i != steps:
                 portfolio.loc[i, "Shares Held"] = -position_multiplier * temp_option.get_greeks()["delta"]
                 portfolio.loc[i, "Option Value"] = position_multiplier * temp_option.price_black_scholes()
             else:
-                if self.option.option_type == "call":
-                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, portfolio.loc[i, "Stock Price"] - self.option.K)
+                if self.primary_option.option_type == "call":
+                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, portfolio.loc[i, "Stock Price"] - self.primary_option.K)
                 else:
-                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, self.option.K - portfolio.loc[i, "Stock Price"])
+                    portfolio.loc[i, "Option Value"] = position_multiplier * max(0, self.primary_option.K - portfolio.loc[i, "Stock Price"])
                 portfolio.loc[i, "Shares Held"] = 0
             cost_of_trade = abs(portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]) * self.transaction_cost
             portfolio.loc[i, "Cash"] = portfolio.loc[i-1, "Cash"] * interest - (portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]) * self.stock_path[i] - cost_of_trade
@@ -217,12 +220,12 @@ class Hedge:
             portfolio.loc[i, "Profit / Loss"] = portfolio.loc[i, "Portfolio Value"] - portfolio.loc[0, "Portfolio Value"]
 
         final_profit_loss = portfolio.loc[steps, "Profit / Loss"]
-        self.portfolio = portfolio
+        self.delta_portfolio = portfolio
         return final_profit_loss
     
     def plot_delta_hedge(self):
-        if self.portfolio is None:
-            print("Please run the simulation first")
+        if self.delta_portfolio is None:
+            print("Please run the delta hedging simulation first")
             return
         
         if self.position == "long":
@@ -230,21 +233,21 @@ class Hedge:
         else:
             position_multiplier = -1
     
-        portfolio = self.portfolio
-        initial_price = self.option.price_black_scholes()
+        portfolio = self.delta_portfolio
+        initial_price = self.primary_option.price_black_scholes()
         final_stock_price = portfolio.loc[len(portfolio)-1, "Stock Price"]
 
-        if self.option.option_type == "call":
-            final_payout = max(0, final_stock_price - self.option.K)
+        if self.primary_option.option_type == "call":
+            final_payout = max(0, final_stock_price - self.primary_option.K)
         else:
-            final_payout = max(0, self.option.K - final_stock_price)
+            final_payout = max(0, self.primary_option.K - final_stock_price)
         
         unhedged_profit_loss = position_multiplier * (final_payout - initial_price)
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle("Delta Hedging Simulation Results ("+self.position.capitalize()+" "+self.option.option_type.capitalize()+")", fontsize=16)
+        fig.suptitle("Delta Hedging Simulation Results ("+self.position.capitalize()+" "+self.primary_option.option_type.capitalize()+")", fontsize=16)
 
         ax1.plot(portfolio.index, portfolio["Stock Price"], label="Stock Price Path", color="skyblue")
-        ax1.axhline(y=self.option.K, color='r', linestyle='--', label=f"Strike Price (${self.option.K})")
+        ax1.axhline(y=self.primary_option.K, color='r', linestyle='--', label=f"Strike Price (${self.primary_option.K})")
         ax1.set_ylabel('Stock Price ($)')
         ax1.set_title('Simulated Stock Price Path')
         ax1.legend()
@@ -260,10 +263,175 @@ class Hedge:
 
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         plt.show()
+    
+    def gamma_hedge(self):
+        if self.hedging_option == None:
+            print("Gamma hedging requires a second hedging option!")
+            return
+        steps = len(self.stock_path) - 1
+        dt = self.primary_option.T / steps
+        interest = np.exp(self.primary_option.r*dt)
 
-my_option = Option(100,105,1,0.05,0.2, "call")
-print(my_option.get_implied_volatility(10))
-stock_path = my_option.simulate_price_path(252)
-my_hedge = Hedge(my_option, stock_path, "short")
-my_hedge.delta_hedging()
-my_hedge.plot_delta_hedge()
+        if self.position == "long":
+            position_multiplier = 1
+        else:
+            position_multiplier = -1
+        
+        initial_price = self.primary_option.price_black_scholes()
+        #initial_delta = self.primary_option.get_greeks()["delta"]
+        initial_gamma = self.primary_option.get_greeks()["gamma"]
+
+        portfolio = pd.DataFrame(index=range(steps+1), columns=[
+            "Stock Price", "Primary Option Value", "Hedging Options Held", "Hedging Option Value", 
+            "Shares Held", "Cash", "Portfolio Value", "Profit / Loss"
+        ])
+        
+        portfolio.loc[0, "Stock Price"] = self.stock_path[0]
+        portfolio.loc[0, "Primary Option Value"] = position_multiplier * initial_price
+        
+        hedging_option_needed = - position_multiplier * initial_gamma / self.hedging_option.get_greeks()["gamma"]
+        portfolio.loc[0, "Hedging Options Held"] = hedging_option_needed
+        portfolio.loc[0, "Hedging Option Value"] = self.hedging_option.price_black_scholes()
+
+        initial_delta = position_multiplier * (self.primary_option.get_greeks()["delta"] + hedging_option_needed * self.hedging_option.get_greeks()["delta"])
+        portfolio.loc[0, "Shares Held"] = - initial_delta
+
+        cash_from_option = - hedging_option_needed * self.hedging_option.price_black_scholes() - initial_price * position_multiplier
+        cost_of_option_trade = abs(hedging_option_needed) * self.option_cost
+        cash_from_stock = - portfolio.loc[0, "Shares Held"] * portfolio.loc[0, "Stock Price"]
+        cost_of_stock_trade = abs(portfolio.loc[0, "Shares Held"]) * self.transaction_cost
+        portfolio.loc[0, "Cash"] = cash_from_option - cost_of_option_trade + cash_from_stock - cost_of_stock_trade
+        portfolio.loc[0, "Portfolio Value"] = (portfolio.loc[0, "Primary Option Value"] + 
+                                               portfolio.loc[0, "Hedging Options Held"] * portfolio.loc[0, "Hedging Option Value"] + 
+                                               portfolio.loc[0, "Shares Held"] * portfolio.loc[0, "Stock Price"] + 
+                                               portfolio.loc[0, "Cash"])
+        portfolio.loc[0, "Profit / Loss"] = 0
+
+        for i in range(1, steps+1):
+
+            time_to_expiry_prim = self.primary_option.T - i*dt
+            time_to_expiry_hedg = self.hedging_option.T - i*dt
+            portfolio.loc[i, "Stock Price"] = self.stock_path[i]
+            
+            temp_prim_option = Option(self.stock_path[i], self.primary_option.K, time_to_expiry_prim, self.primary_option.r, self.primary_option.sigma, self.primary_option.option_type)
+            temp_hedg_option = Option(self.stock_path[i], self.hedging_option.K, time_to_expiry_hedg, self.hedging_option.r, self.hedging_option.sigma, self.hedging_option.option_type)
+
+            if i == steps:
+                primary_final_payout = max(0, portfolio.loc[i, "Stock Price"] - self.primary_option.K) if self.primary_option.option_type == "call" else max(0, self.primary_option.K - portfolio.loc[i, "Stock Price"])
+                if time_to_expiry_hedg == 0:
+                    hedge_final_payout = max(0, portfolio.loc[i, "Stock Price"] - self.hedging_option.K) if self.hedging_option.option_type == "call" else max(0, self.hedging_option.K - portfolio.loc[i, "Stock Price"])
+                else:
+                    hedge_final_payout = temp_hedg_option.price_black_scholes()
+                portfolio.loc[i, "Primary Option Value"] = position_multiplier * primary_final_payout
+                portfolio.loc[i, "Hedging Option Value"] = hedge_final_payout
+                portfolio.loc[i, "Hedging Options Held"] = portfolio.loc[i-1, "Hedging Options Held"]
+                portfolio.loc[i, "Shares Held"] = 0
+            else:
+                portfolio.loc[i, "Primary Option Value"] = position_multiplier * temp_prim_option.price_black_scholes()
+                if abs(temp_hedg_option.get_greeks()["gamma"]) < 1e-9:
+                    portfolio.loc[i, "Hedging Options Held"] = portfolio.loc[i-1, "Hedging Options Held"]
+                else:
+                    portfolio.loc[i, "Hedging Options Held"] = - position_multiplier * temp_prim_option.get_greeks()["gamma"] / self.hedging_option.get_greeks()["gamma"]
+                portfolio.loc[i, "Hedging Option Value"] = temp_hedg_option.price_black_scholes()
+
+                portfolio_delta = (position_multiplier * temp_prim_option.get_greeks()["delta"]) + (portfolio.loc[i, "Hedging Options Held"] * temp_hedg_option.get_greeks()["delta"])
+                portfolio.loc[i, "Shares Held"] = -portfolio_delta
+
+                options_traded = portfolio.loc[i, "Hedging Options Held"] - portfolio.loc[i-1, "Hedging Options Held"]
+                shares_traded = portfolio.loc[i, "Shares Held"] - portfolio.loc[i-1, "Shares Held"]
+                rebalancing_cost = (abs(options_traded) * self.option_cost) + (abs(shares_traded) * self.transaction_cost)
+                cash_flow_from_trades = (-options_traded * portfolio.loc[i, "Hedging Option Value"]) + (-shares_traded * self.stock_path[i])
+                portfolio.loc[i, "Cash"] = portfolio.loc[i-1, "Cash"] * interest + cash_flow_from_trades - rebalancing_cost
+
+                portfolio.loc[i, "Portfolio Value"] = (portfolio.loc[i, "Primary Option Value"] +
+                                               portfolio.loc[i, "Hedging Options Held"] * portfolio.loc[i, "Hedging Option Value"] +
+                                               portfolio.loc[i, "Shares Held"] * portfolio.loc[i, "Stock Price"] +
+                                               portfolio.loc[i, "Cash"])
+                portfolio.loc[i, "Profit / Loss"] = portfolio.loc[i, "Portfolio Value"] - portfolio.loc[0, "Portfolio Value"]
+            
+        self.gamma_portfolio = portfolio
+        return portfolio.loc[steps, "Profit / Loss"]
+
+    def plot_gamma_hedge(self):
+        if self.gamma_portfolio is None:
+            print("Please run the gamma hedging simulation first!")
+            return
+        
+        if self.position == "long":
+            position_multiplier = 1
+        else:
+            position_multiplier = -1
+        
+        portfolio = self.gamma_portfolio
+        initial_price = self.primary_option.price_black_scholes()
+        final_stock_price = portfolio.loc[len(portfolio)-1, "Stock Price"]
+
+        if self.primary_option.option_type == "call":
+            final_payout = max(0, final_stock_price - self.primary_option.K)
+        else:
+            final_payout = max(0, self.primary_option.K - final_stock_price)
+            
+        unhedged_profit_loss = position_multiplier * (final_payout - initial_price)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+        fig.suptitle("Gamma Hedging Simulation Results ("+self.position.capitalize()+" "+self.primary_option.option_type.capitalize()+")", fontsize=16)
+
+        ax1.plot(portfolio.index, portfolio["Stock Price"], label="Stock Price Path", color="skyblue")
+        ax1.axhline(y=self.primary_option.K, color='r', linestyle='--', label=f"Strike Price (${self.primary_option.K})")
+        ax1.set_ylabel('Stock Price ($)')
+        ax1.set_title('Simulated Stock Price Path')
+        ax1.legend()
+        ax1.grid(True, linestyle='--', alpha=0.6)
+            
+        ax2.plot(portfolio.index, portfolio["Profit / Loss"], label="Hedged Portfolio Profit / Loss", color="forestgreen")
+        ax2.axhline(y=unhedged_profit_loss, color="darkorange",linestyle="--", label=f'Unhedged Profit/Loss (${unhedged_profit_loss:.2f})')
+        ax2.set_xlabel("Time")
+        ax2.set_ylabel("Profit and Loss ($)")
+        ax2.set_title("Portfolio Profit / Loss: Hedged vs. Unhedged")
+        ax2.legend()
+        ax2.grid(True, linestyle="--", alpha=0.6)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        plt.show()
+    
+    def plot_gamma_vs_delta_hedge(self):
+        if self.gamma_portfolio is None or self.delta_portfolio is None:
+            print("Please run both the gamma hedging and delta hedging simulation first!")
+            return
+        
+        if self.position == "long":
+            position_multiplier = 1
+        else:
+            position_multiplier = -1
+        
+        gamma_portfolio = self.gamma_portfolio
+        delta_portfolio = self.delta_portfolio
+        initial_price = self.primary_option.price_black_scholes()
+        final_stock_price = gamma_portfolio.loc[len(gamma_portfolio)-1, "Stock Price"]
+
+        if self.primary_option.option_type == "call":
+            final_payout = max(0, final_stock_price - self.primary_option.K)
+        else:
+            final_payout = max(0, self.primary_option.K - final_stock_price)
+            
+        unhedged_profit_loss = position_multiplier * (final_payout - initial_price)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+        fig.suptitle("Delta Hedging vs Gamma Hedging Simulation Results ("+self.position.capitalize()+" "+self.primary_option.option_type.capitalize()+")", fontsize=16)
+
+        ax1.plot(gamma_portfolio.index, gamma_portfolio["Stock Price"], label="Stock Price Path", color="skyblue")
+        ax1.axhline(y=self.primary_option.K, color='r', linestyle='--', label=f"Strike Price (${self.primary_option.K})")
+        ax1.set_ylabel('Stock Price ($)')
+        ax1.set_title('Simulated Stock Price Path')
+        ax1.legend()
+        ax1.grid(True, linestyle='--', alpha=0.6)
+            
+        ax2.plot(gamma_portfolio.index, gamma_portfolio["Profit / Loss"], label="Gamma Hedged Portfolio Profit / Loss", color="forestgreen")
+        ax2.plot(delta_portfolio.index, delta_portfolio["Profit / Loss"], label="Delta Hedged Portfolio Profit / Loss", color="xkcd:coral")
+        ax2.axhline(y=unhedged_profit_loss, color="darkorange",linestyle="--", label=f'Unhedged Profit/Loss (${unhedged_profit_loss:.2f})')
+        ax2.set_xlabel("Time")
+        ax2.set_ylabel("Profit and Loss ($)")
+        ax2.set_title("Portfolio Profit / Loss: Hedged vs. Unhedged")
+        ax2.legend()
+        ax2.grid(True, linestyle="--", alpha=0.6)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        plt.show()
